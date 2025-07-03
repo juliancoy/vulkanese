@@ -206,7 +206,7 @@ class Shader(sinode.Sinode):
         return self.spirv
 
     def run(self, blocking=True):
-        self.dump()
+        #self.dump()
         self.computePipeline.run(blocking=blocking)
 
     def wait(self):

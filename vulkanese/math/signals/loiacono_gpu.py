@@ -209,11 +209,21 @@ if __name__ == "__main__":
     z += np.sin(2 * np.arange(2 ** 15) * 2 * np.pi * A4 / sr)
     z += np.sin(3 * np.arange(2 ** 15) * 2 * np.pi * A4 / sr)
     z += np.sin(4 * np.arange(2 ** 15) * 2 * np.pi * A4 / sr)
-
+    # Ensure z is float32 to match GPU buffer type
+    z = z.astype(np.float32)
+    
     multiple = 40
-    normalizedStep = 5.0 / sr
-    # create a linear distribution of desired frequencies
-    fprime = np.arange(100 / sr, 3000 / sr, normalizedStep)
+    num_frequencies = 1024  # or any fixed length you prefer
+    min_freq_hz = 100
+    max_freq_hz = 3000
+
+    # Create a fixed-length frequency array (in Hz)
+    fprime_hz = np.linspace(min_freq_hz, max_freq_hz, num_frequencies)
+
+    # Normalize by the sampling rate for internal use
+    fprime = fprime_hz / sr
+
+    
 
     # generate a Loiacono based on this SR
     # (this one runs in CPU. reference only)
@@ -223,8 +233,10 @@ if __name__ == "__main__":
     # begin GPU test
     instance = ve.instance.Instance(verbose=True)
     device = instance.getDevice(0)
+    # Convert fprime to float32 to match GPU buffer type
+    fprime_float32 = fprime.astype(np.float32)
     linst_gpu = Loiacono_GPU(
-        device=device, parent=device, fprime=fprime, multiple=linst.multiple
+        device=device, parent=device, fprime=fprime_float32, multiple=linst.multiple
     )
     print("--- Running CPU Test ---")
     for i in range(10):

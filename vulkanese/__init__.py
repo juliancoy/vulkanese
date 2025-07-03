@@ -14,3 +14,4 @@ from . import vkimage
 from . import synchronization
 from . import examples
 from . import surface
+from . import ai

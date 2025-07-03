@@ -209,11 +209,11 @@ def runWebcamDemo():
         i+=1
         # Run the transformation with example parameters
         output_img = transform.run(
-            input_img, scale=[2.0, 2.0], rotation_angle=math.pi * 2 * (i / turns), translation=[0, 0]
+            input_img, scale=[3.0, 3.0], rotation_angle=math.pi * 2 * (i / turns), translation=[0, 0]
         )
         
         # Display the transformed image
-        cv2.imshow('Output Image', cv2.resize(output_img, (int(height/4), int(width/4))))
+        cv2.imshow('Output Image', cv2.resize(output_img, (int(height/2), int(width/2))))
         cv2.waitKey(1)
 
     # Close all OpenCV windows
