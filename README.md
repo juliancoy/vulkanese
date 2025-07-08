@@ -2,6 +2,10 @@
 ## Installation  
 ```pip install git+https://github.com/julianfl0w/vulkanese```
 
+Note: if you're on Windows, you will also need 
+The Vulkan SDK
+https://vulkan.lunarg.com/sdk/home
+
 ## It's Vulkan-Ease!  
 
 This repository  

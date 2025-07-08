@@ -8,5 +8,5 @@ BUFFERS_STRING// This will be (or has been) replaced by buffer definitions
     
 void main() {                         
     gl_Position = vec4(position, 1.0);
-    fragColor = color;                
+    fragBuffer = color;                
 }                                     

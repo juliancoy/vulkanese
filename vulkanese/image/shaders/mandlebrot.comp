@@ -2,15 +2,15 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_gpu_shader_fp64 : enable
 
-#define HEIGHT 800
-#define WIDTH 1280
+#define HEIGHT 1920
+#define WIDTH 1080
 #define WORKGROUP_SIZE 32
 // This will be (or has been) replaced by constant definitions
-layout(std430, set = 0, binding = 0) buffer imageData_buf
+layout(std430, set = 0, binding = 0 ) buffer imageData_buf
 {
-   writeonly uint imageData[1024000];
+   writeonly uint imageData[2073600];
 };
-layout(std430, set = 0, binding = 1) buffer paramsBuffer_buf
+layout(std430, set = 0, binding = 1 ) buffer paramsBuffer_buf
 {
    readonly double paramsBuffer[16];
 };
@@ -31,8 +31,8 @@ void main() {
   double originY = paramsBuffer[1]; 
   double mandleStride = paramsBuffer[2];
 
-  double x = double(originX + float(gl_GlobalInvocationID.x) * mandleStride);
-  double y = double(originY + float(gl_GlobalInvocationID.y) * mandleStride);
+  double x = originX + double(gl_GlobalInvocationID.x) * mandleStride;
+  double y = originY + double(gl_GlobalInvocationID.y) * mandleStride;
 
   /*
   What follows is code for rendering the mandelbrot set.

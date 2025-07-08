@@ -10,6 +10,7 @@ import re
 import vulkan as vk
 from . import buffer
 from . import compute_pipeline
+import platform
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import vulkanese as ve
@@ -26,24 +27,21 @@ class Empty:
 
 class Shader(sinode.Sinode):
     def __init__(self, **kwargs):
-
         sinode.Sinode.__init__(self, parent=kwargs["device"], **kwargs)
 
         if self not in self.device.shaders:
             self.device.shaders += [self]
 
         self.proc_kwargs(
-            **{
-                "sourceFilename": "",
-                "stage": vk.VK_SHADER_STAGE_VERTEX_BIT,
-                "DEBUG": False,
-                "workgroupCount": [1, 1, 1],
-                "compressBuffers": True,
-                "waitSemaphores": [],
-                "depends": [],
-                "waitStages": None,
-                "signalSemaphores": [],  # these only used for compute shaders
-            }
+            stage=vk.VK_SHADER_STAGE_VERTEX_BIT,
+            DEBUG=False,
+            workgroupCount=[1, 1, 1],
+            compressBuffers=True,
+            waitSemaphores=[],
+            depends=[],
+            waitStages=None,
+            signalSemaphores=[],  # these only used for compute shaders
+            sourceFilename = ""
         )
 
         for shader in self.depends:
@@ -51,12 +49,14 @@ class Shader(sinode.Sinode):
             shader.signalSemaphores += [newSemaphore]
             self.waitSemaphores += [newSemaphore]
 
-        self.descriptorPool = ve.descriptorPool.DescriptorPool(
+        self.descriptorPool = ve.descriptor_pool.DescriptorPool(
             device=self.device, parent=self
         )
 
         self.gpuBuffers = Empty()
         self.basename = self.sourceFilename.replace(".template", "")
+        #if not self.basename.endswith(".comp"):
+        #    self.basename += ".comp"
 
         self.debugBuffers = []
         for buffer in self.buffers:
@@ -74,15 +74,21 @@ class Shader(sinode.Sinode):
         self.descriptorPool.finalize()
 
         outfilename = self.basename + ".spv"
+        # if its the empty string "", just read it
+        if self.sourceFilename == "":
+            self.glslCode = self.sourceText
+            self.compile()
+
         # if its spv (compiled), just run it
-        if self.sourceFilename.endswith(".spv"):
+        elif self.sourceFilename.endswith(".spv"):
             with open(self.sourceFilename, "rb") as f:
-                spirv = f.read()
+                self.spirv = f.read()
+
         # if its not an spv, compile it
         elif ".template" in self.sourceFilename:
-            spirv = self.compile()
-            with open(outfilename, "wb+") as f:
-                f.write(spirv)
+            with open(self.sourceFilename, "r") as f:
+                self.glslCode = f.read()
+            self.compile()
         else:
             raise Exception(
                 "source template filename "
@@ -94,8 +100,8 @@ class Shader(sinode.Sinode):
         self.vkShaderModuleCreateInfo = vk.VkShaderModuleCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             # flags=0,
-            codeSize=len(spirv),
-            pCode=spirv,
+            codeSize=len(self.spirv),
+            pCode=self.spirv,
         )
 
         self.vkShaderModule = vk.vkCreateShaderModule(
@@ -132,7 +138,6 @@ class Shader(sinode.Sinode):
         # self.run()
 
     def release(self):
-
         self.debug("destroying descriptor Pool")
         self.descriptorPool.release()
         if hasattr(self, "computePipeline"):
@@ -143,45 +148,65 @@ class Shader(sinode.Sinode):
 
     def compile(self):
 
-        with open(self.sourceFilename, "r") as f:
-            glslCode = f.read()
-
         # PREPROCESS THE SHADER CODE
         # RELATIVE TO DEFINED BUFFERS
 
+        BUFFERS_STRING = ""
+        # novel INPUT buffers belong to THIS Stage (others are linked)
+        if self.stage == vk.VK_SHADER_STAGE_VERTEX_BIT:
+
+            for b in self.buffers:
+                if self.stage == vk.VK_SHADER_STAGE_FRAGMENT_BIT and b.name == "fragColor":
+                    b.qualifier = "in"
+                    BUFFERS_STRING += b.getDeclaration()
+        else:
+            BUFFERS_STRING += self.descriptorPool.getComputeDeclaration()
+
+        if self.DEBUG:
+            self.glslCode = self.addIndicesToOutputs(self.glslCode)
+
         # put structs and buffers into the code
-        glslCode = glslCode.replace("BUFFERS_STRING", self.descriptorPool.getComputeDeclaration())
+        self.glslCode = self.glslCode.replace("BUFFERS_STRING", BUFFERS_STRING)
+        
 
         # add definitions from constants dict
         DEFINE_STRING = ""
         for k, v in self.constantsDict.items():
             DEFINE_STRING += "#define " + k + " " + str(v) + "\n"
-        glslCode = glslCode.replace("DEFINE_STRING", DEFINE_STRING)
+        self.glslCode = self.glslCode.replace("DEFINE_STRING", DEFINE_STRING)
 
         # COMPILE GLSL TO SPIR-V
         self.debug("compiling Stage")
         glslFilename = self.basename
 
         with open(glslFilename, "w+") as f:
-            f.write(glslCode)
+            f.write(self.glslCode)
 
-        # delete the old one
         # POS always outputs to "a.spv"
         compiledFilename = "a.spv"
+
+        # delete the old one
         if os.path.exists(compiledFilename):
             os.remove(compiledFilename)
+
         self.debug("running " + glslFilename)
         # os.system("glslc --scalar-block-layout " + glslFilename)
-        glslcbin = os.path.join(here, "glslc")
+        if platform.system() == "Windows":
+            glslcbin = "glslc"
+        else:
+            glslcbin = os.path.join(here, "glslc")
         os.system(glslcbin + " --target-env=vulkan1.1 " + glslFilename)
         with open(compiledFilename, "rb") as f:
-            spirv = f.read()
+            self.spirv = f.read()
 
+        # delete it after reading
+        if os.path.exists(compiledFilename):
+            os.remove(compiledFilename)
 
-        return spirv
+        return self.spirv
 
     def run(self, blocking=True):
-        self.dump()
+        #self.dump()
         self.computePipeline.run(blocking=blocking)
 
     def wait(self):
@@ -197,7 +222,6 @@ class Shader(sinode.Sinode):
     def dumpMemory(self, filename="debug.json"):
         outdict = {}
         for b in self.buffers:
-
             if not b.DEBUG:
                 continue
             rcvdArray = b.getAsNumpyArray()[0]
@@ -243,22 +267,12 @@ class Shader(sinode.Sinode):
 class VertexStage(Shader):
     def __init__(
         self,
-        device,
-        buffers,
-        constantsDict,
-        sourceFilename,
-        name="mandlebrot",
-        DEBUG=False,
+        **kwargs
     ):
         Shader.__init__(
             self,
-            device=device,
-            buffers=buffers,
-            constantsDict=constantsDict,
-            sourceFilename=sourceFilename,
             stage=vk.VK_SHADER_STAGE_VERTEX_BIT,
-            name=name,
-            DEBUG=DEBUG,
+            **kwargs
         )
 
 

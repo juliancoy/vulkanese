@@ -16,7 +16,7 @@ import sinode.sinode as sinode
 
 class Surface(sinode.Sinode):
     def __init__(self, instance, device, width, height):
-        sinode.Sinode.__init__(self, instance)
+        sinode.Sinode.__init__(self, parent =instance)
         self.running = True
         self.instance = instance
         self.device = device
@@ -57,14 +57,16 @@ class Surface(sinode.Sinode):
         # else:
         #    raise Exception("Platform not supported: " + str(self.wm_info.subsystem))
 
-        self.surface_mapping = {
+        self.surface_mapping_dict = {
             sdl2.SDL_SYSWM_UNKNOWN: self.surface_xlib,
             sdl2.SDL_SYSWM_X11: self.surface_xlib,
             sdl2.SDL_SYSWM_WAYLAND: self.surface_wayland,
             sdl2.SDL_SYSWM_WINDOWS: self.surface_win32,
-        }
+                }
+        self.surface_mapping =  list(self.surface_mapping_dict.values())
         print(self.wm_info.subsystem)
         self.vkSurface = self.surface_mapping[self.wm_info.subsystem]()
+        print(self.vkSurface)
 
         vkGetPhysicalDeviceSurfaceSupportKHR = vk.vkGetInstanceProcAddr(
             self.instance.vkInstance, "vkGetPhysicalDeviceSurfaceSupportKHR"
@@ -184,7 +186,7 @@ class Surface(sinode.Sinode):
             ):
                 print("FORMAT vk.VK_FORMAT_B8G8R8A8_UNORM")
                 return f
-        die
+        #die
         return self.formats[0]
 
     def get_surface_present_mode(self):

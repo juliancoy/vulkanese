@@ -1,0 +1,1 @@
+docker run --gpus all -it -v $(pwd):/app -w /app tensorflow/tensorflow:latest-gpu bash 

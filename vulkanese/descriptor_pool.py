@@ -19,21 +19,21 @@ class DescriptorPool(sinode.Sinode):
         self.vkDevice = self.device.vkDevice
 
         # The descriptor set number 0 will be used for engine-global resources, and bound once per frame.
-        self.descSetGlobal = ve.descriptorSet.DescriptorSet(
+        self.descSetGlobal = ve.descriptor_set.DescriptorSet(
             self, binding=0, name="global", type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
         )
         # The descriptor set number 2 will be used for material resources,
-        self.descSetUniform = ve.descriptorSet.DescriptorSet(
+        self.descSetUniform = ve.descriptor_set.DescriptorSet(
             self, binding=1, name="uniform", type=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
         )
 
         # The descriptor set number 1 will be used for per-pass resources, and bound once per pass.
-        self.descSetPerPass = ve.descriptorSet.DescriptorSet(
+        self.descSetPerPass = ve.descriptor_set.DescriptorSet(
             self, binding=2, name="perPass", type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
         )
 
         # and the number 3 will be used for per-object resources.
-        self.descSetPerObject = ve.descriptorSet.DescriptorSet(
+        self.descSetPerObject = ve.descriptor_set.DescriptorSet(
             self, binding=3, name="perObject", type=vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
         )
 
@@ -170,6 +170,16 @@ class DescriptorPool(sinode.Sinode):
         self.device.instance.debug("destroying descriptor pool")
         if hasattr(self, "vkDescriptorPool"):
             vk.vkDestroyDescriptorPool(self.vkDevice, self.vkDescriptorPool, None)
+
+    def createStorageBuffer(self, **kwargs):
+        newB = ve.buffer.StorageBuffer(**kwargs)
+        self.addBuffer(newB)
+        return newB
+
+    def createDebugBuffer(self, **kwargs):
+        newB = ve.buffer.DebugBuffer(**kwargs)
+        self.addBuffer(newB)
+        return newB
 
     def addBuffer(self, buffer):
         if type(buffer) == ve.buffer.StorageBuffer:

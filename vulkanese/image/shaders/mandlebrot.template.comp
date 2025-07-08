@@ -20,8 +20,8 @@ void main() {
   double originY = paramsBuffer[1]; 
   double mandleStride = paramsBuffer[2];
 
-  double x = double(originX + float(gl_GlobalInvocationID.x) * mandleStride);
-  double y = double(originY + float(gl_GlobalInvocationID.y) * mandleStride);
+  double x = originX + double(gl_GlobalInvocationID.x) * mandleStride;
+  double y = originY + double(gl_GlobalInvocationID.y) * mandleStride;
 
   /*
   What follows is code for rendering the mandelbrot set.

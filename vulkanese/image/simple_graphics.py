@@ -22,13 +22,11 @@ htHere = os.path.dirname(os.path.abspath(__file__))
 
 
 class SimpleGraphicsPipeline(ve.graphics_pipeline.GraphicsPipeline):
-    def __init__(self, device, surface, constantsDict):
+    def __init__(self, device, surface, **kwargs):
         self.width = 700
         self.height = 700
         self.device = device
-        self.constantsDict = constantsDict
-        for k, v in self.constantsDict.items():
-            exec("self." + k + " = " + str(v))
+        self.setDefaults(**kwargs)
 
         FragBuffer = ve.buffer.VertexBuffer(
             device=self.device,

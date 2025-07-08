@@ -1,0 +1,332 @@
+
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_gpu_shader_fp64 : enable
+
+#define gl_FragCoord gl_GlobalInvocationID
+#define HEIGHT 864
+#define WIDTH 1536
+#define WORKGROUP_SIZE 32
+// This will be (or has been) replaced by constant definitions
+layout(std430, set = 0, binding = 0) buffer imageData_buf
+{
+   writeonly uint imageData[1327104];
+};
+layout(std430, set = 0, binding = 1) buffer iTime_buf
+{
+   readonly float iTime;
+};
+layout(std430, set = 0, binding = 2) buffer iResolution_buf
+{
+   readonly vec4 iResolution;
+};
+layout(std430, set = 0, binding = 3) buffer iMouse_buf
+{
+   readonly vec4 iMouse;
+};
+// This will be (or has been) replaced by buffer definitions
+    
+layout (local_size_x = WORKGROUP_SIZE, local_size_y = WORKGROUP_SIZE, local_size_z = 1 ) in;
+
+        // 80's style shiny chrome effect with highlights for extra shininess.
+// Based on 80s chrome effect by nuclear @ https://www.shadertoy.com/view/XtcGzs
+//
+// Coloring and general style inspired by Drive Radio logo.
+//
+//
+// With the main scene and almost everything by nuclear:
+// 80s chrome effect @ https://www.shadertoy.com/view/XtcGzs
+//
+// Post effects by P_Malin:
+// Where the River Goes (+ PostFX) @ https://www.shadertoy.com/view/XdG3zd
+//
+// Subpixel dithering by CeeJayDK:
+// dithering: Color Banding Removal @ https://www.shadertoy.com/view/MslGR8
+//
+
+const bool apply_vignetting = true;
+const bool apply_tonemap = false;
+const bool apply_gamma = false;
+const bool apply_crushedshadows = false;
+const float vignet = 0.491;
+const float gamma = 0.87;
+const float exposure = 1.44;
+const float smoothness = 0.005;
+const float bevel_size = 0.1;
+const float horiz_scale = 10.0;
+const float spokes = 5.0;
+const float highlights = 23.0;
+const vec2 light_dir = vec2(0.1, 1.0);
+const vec3 mid_color = vec3(0.133, 0.006, 0.612);
+const vec3 horiz_color = vec3(0.612, 0.006, 1.0);
+const vec3 fog_color = vec3(0.008, 0.04, 0.022);
+const vec3 grid_color = vec3(1.0, 0.2, 1.0);
+const vec3 top_color = vec3(0.05, 0.0, 0.035);
+const float bevelMul = 1.8760002;
+const float lineMul = 1.06;
+const float line1Mul = -1.0;
+const float line2Mul = -1.0;
+const float bevelExp = 0.772;
+const float lineExp = 8.776;
+const float glareMul = 0.736;
+const float sparkleMul = -2.0;
+const float displaceAmount = -2.17;
+const float ptMul = 0.188;
+const float ptDiv = 20.715;
+const float distMul = 7.2980003;
+const float distDiv = 1.02;
+const float PI = 3.1415926535897932384626433832795;
+const float HALF_PI = 1.5707963267948966192313216916398;
+float spin0;
+
+mat2 rot2(float T) {
+	mat2 R = mat2(vec2(cos(T), sin(T)), vec2( -sin(T), cos(T)));
+	return R;
+}
+float udLine(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p- a, ba = b- a;
+	return length(pa- ba* dot(pa, ba)/ dot(ba, ba));
+}
+// Subpixel dithering by CeeJayDK
+vec3 dither() {
+	float px = 1.0/ 255.0;
+	float fpx = px* fract(dot(gl_FragCoord.xy- .5, vec2(5./ 16., 19./ 36.)));
+	return vec3(px- fpx, fpx, px- fpx);
+}
+// Post Effects by P_Malin
+vec3 ApplyVignetting(const in vec2 vUV, const in vec3 vInput) {
+	vec2 vOffset = (vUV- 0.5)* sqrt(2.0);
+	float fDist = dot(vOffset, vOffset);
+	const float kStrength = vignet;
+	float fShade = mix(1.0, 1.0- kStrength, fDist);
+	return vInput* fShade;
+}
+vec3 ApplyTonemap(const in vec3 vLinear) {
+	const float kExposure = exposure;
+	return 1.0- exp2(vLinear* -kExposure);
+}
+vec3 ApplyGamma(const in vec3 vLinear) {
+	const float kGamma = gamma;
+	return pow(vLinear, vec3(1.0/ kGamma));
+}
+vec3 ApplyPostFX(const in vec2 vUV, const in vec3 vInput) {
+	vec3 vFinal = vInput;
+	if(apply_vignetting) vFinal = ApplyVignetting(vUV, vFinal);
+	if(apply_tonemap) vFinal = ApplyTonemap(vFinal);
+	if(apply_gamma) vFinal = ApplyGamma(vFinal);
+	if(apply_crushedshadows) vFinal = vFinal* 1.1- 0.1;
+	return vFinal;
+}
+float glyph_dist2(in vec2 pt, float angle) {
+	float len = length(pt);
+	float rad = 1.0- len;
+	return rad- abs(sin(angle* spokes/ 2.0))* 0.6;
+}
+float glyph_dist(in vec2 pt) {
+	float angle = atan(pt.y, pt.x)- spin0* 2.0* PI;
+	return glyph_dist2(pt, angle);
+}
+vec2 sparklyPosition(float progress) {
+	vec2 pt = vec2(1, 0);
+	float angle = 2.0* PI* progress;
+	float glyph = glyph_dist2(pt, angle);
+	vec2 adjust = vec2(1.0- 0.5* bevel_size, 0);
+	vec2 trace = pt* glyph+ adjust;
+	vec2 pos = trace* rot2( -angle+ -2.0* PI* spin0);
+	return pos;
+}
+vec2 gradient(vec2 pt, float dist) {
+	float dfdu = glyph_dist(pt+ vec2(0.01, 0.0))- dist/ 1.01;
+	float dfdv = glyph_dist(pt+ vec2(0.0, 0.01))- dist/ 1.01;
+	vec2 grad = normalize(vec2(dfdu, -dfdv));
+	return grad;
+}
+float bevelShade(vec2 pt) {
+	return clamp(1.0* dot(gradient(pt, glyph_dist(pt)), light_dir)* 0.5+ 0.5, 0.0,
+			1.0);
+}
+vec3 gradcolors(float t) {
+	float over = cos(t* HALF_PI);
+	float under = cos(t* HALF_PI+ HALF_PI)+ 1.0;
+	return vec3(over, under, over);
+}
+vec3 sky_grad(float t) {
+	return mix(horiz_color, mid_color, t- 0.8);
+}
+vec3 grid(in vec2 pt) {
+	float z = 1.0+ abs(pt.y* (1.0- 0.025* pt.x* pt.x))* 6.0;
+	float ptx = pt.x/ z;
+	float pty = abs(pt.y)/ z;
+	float val = max(sin(ptx* 100.0), sin(pty* 900.0- 8.0* PI* spin0));
+	float col_t = smoothstep(2.0, 4.5, z);
+	vec3 col = mix(fog_color, grid_color, col_t);
+	float upper = z* z* 0.00375;
+	float mixAmount = 5.0- 2.0* smoothstep(0.4, 0.6, -pt.y)+ 2.4* pt.y;
+	float lowMix = 0.9+ upper* mixAmount;
+	float smoothMul = smoothstep(lowMix, 0.95, val);
+	return smoothstep(0.11, 0.22, -pt.y)* val* smoothMul* col;
+}
+
+//
+// GLSL textureless classic 2D noise "cnoise",
+// with an RSL-style periodic variant "pnoise".
+// Author:  Stefan Gustavson (stefan.gustavson@liu.se)
+// Version: 2011-08-22
+//
+// Many thanks to Ian McEwan of Ashima Arts for the
+// ideas for permutation and gradient selection.
+//
+// Copyright (c) 2011 Stefan Gustavson. All rights reserved.
+// Distributed under the MIT license. See LICENSE file.
+// https://github.com/stegu/webgl-noise
+//
+
+vec4 mod289(vec4 x) {
+	return x- floor(x* (1.0/ 289.0))* 289.0;
+}
+
+vec4 permute(vec4 x) {
+	return mod289(((x* 34.0)+ 1.0)* x);
+}
+
+vec4 taylor_inv_sqrt(vec4 r) {
+	return 1.79284291400159- 0.85373472095314* r;
+}
+
+// by Ken Perlin
+vec2 smootherstep(vec2 t) {
+	return t* t* t* (t* (t* 6.0- 15.0)+ 10.0);
+}
+
+// Classic perlin noise
+float cnoise(vec2 p) {
+	vec4 pi = floor(p.xyxy)+ vec4(0.0, 0.0, 1.0, 1.0);
+	vec4 pf = fract(p.xyxy)- vec4(0.0, 0.0, 1.0, 1.0);
+	pi = mod289(pi); // To avoid truncation effects in permutation
+	vec4 ix = pi.xzxz;
+	vec4 iy = pi.yyww;
+	vec4 fx = pf.xzxz;
+	vec4 fy = pf.yyww;
+
+	vec4 i = permute(permute(ix)+ iy);
+
+	vec4 gx = fract(i* (1.0/ 41.0))* 2.0- 1.0;
+	vec4 gy = abs(gx)- 0.5;
+	vec4 tx = floor(gx+ 0.5);
+	gx = gx- tx;
+
+	vec2 g00 = vec2(gx.x, gy.x);
+	vec2 g10 = vec2(gx.y, gy.y);
+	vec2 g01 = vec2(gx.z, gy.z);
+	vec2 g11 = vec2(gx.w, gy.w);
+
+	vec4 norm = taylor_inv_sqrt(
+			vec4(dot(g00, g00), dot(g01, g01), dot(g10, g10), dot(g11, g11)));
+	g00 *= norm.x;
+	g01 *= norm.y;
+	g10 *= norm.z;
+	g11 *= norm.w;
+
+	float n00 = dot(g00, vec2(fx.x, fy.x));
+	float n10 = dot(g10, vec2(fx.y, fy.y));
+	float n01 = dot(g01, vec2(fx.z, fy.z));
+	float n11 = dot(g11, vec2(fx.w, fy.w));
+
+	vec2 fade_xy = smootherstep(pf.xy);
+	vec2 n_x = mix(vec2(n00, n01), vec2(n10, n11), fade_xy.x);
+	float n_xy = mix(n_x.x, n_x.y, fade_xy.y);
+	return 2.3* n_xy;
+}
+float fbm4(float p) {
+	float res = 0.0;
+	float freq = 1.0;
+	float scale = 1.0;
+
+	for(int i = 0; i< 4; i++) {
+		res += cnoise(vec2(p* freq, 0.0))* scale;
+		freq *= 2.0;
+		scale *= 0.5;
+	}
+	return res;
+}
+
+vec3 backdrop(in vec2 pt) {
+	//return grid(pt);
+	vec3 color = sky_grad(pt.y* 2.0);
+	float horiz = pt.y+ fbm4(pt.x* 1.8)* 0.1;
+	return mix(mix(fog_color, top_color, pt.y* 2.0+ 0.5), color,
+			smoothstep(0.025, 0.03, horiz))+ grid(pt)+ dither();
+}
+void mainImage( out vec4 fragColor, in vec2 fragCoord) {
+    spin0 = iTime* 0.2;
+	vec2 uv = fragCoord.xy/ iResolution.xy;
+	float aspect = iResolution.x/ iResolution.y;
+	vec2 pt = (uv* 2.0- 1.0)* vec2(aspect, 1.0)* 1.0;
+
+	float dist = glyph_dist(pt);
+	vec2 grad = gradient(pt, dist);
+
+	float val = smoothstep( -smoothness, smoothness, dist);
+	float bevel = smoothstep(bevel_size- smoothness, bevel_size+ smoothness,
+			dist);
+
+	// --- face gradients ---
+	vec2 ngrad = (gradient(pt*ptMul/ptDiv, dist*distMul/distDiv));
+	vec2 auv = uv + ngrad*0.01* displaceAmount;
+	float t = auv.y;
+	float horiz = t* 0.95+ fbm4(auv.x* 1.8* 2.0)* .075;
+	vec3 color_low = gradcolors(clamp(1.1275* t- 0.8+ horiz, 0.0, 1.0))
+			* vec3(1.7, 1.5, 1.4);
+	vec3 color_high = gradcolors(clamp(1.75* t- 0.4+ horiz, 0.0, 1.0))
+			* vec3(1.9, 1.5, 1.4);
+	vec3 face_color = mix(color_high, color_low, smoothstep(0.495, 0.505, horiz))
+			+ dither();
+
+	// --- bevel gradients ---
+	float bv_shade = clamp(1.0* dot(grad, normalize(vec2(0.1, 1.0)))* 0.5+ 0.5,
+			0.0, 1.0);
+
+	vec3 bv_color = gradcolors(1.0- bv_shade)* vec3(1.6, 1.05, 1.13);
+	vec3 color = mix(bv_color, face_color, bevel);
+
+	color = mix(backdrop(pt), color, val);
+	// --- bevel highlights ---
+	for(float i = 0.0; i< highlights; i++) {
+		vec2 glintPos = sparklyPosition((i+ 1.0)/ highlights);
+		float dist = distance(pt, glintPos);
+		float sparkle = dist* 2.0;
+		if(sparkle< 1.0) {
+			float line1 = udLine(pt, glintPos, glintPos+ vec2(1, +1))* line1Mul;
+			float line2 = udLine(pt, glintPos, glintPos+ vec2(1, -1))* line2Mul;
+			float bevel = bevelShade(glintPos)* bevelMul;
+			float lines = 1.0+ (line1+ line2)* lineMul;
+			float glare = pow(bevel, bevelExp)* pow(lines, lineExp);
+			color = color+ glare* glareMul* (1.0- sparkle* sparkleMul);
+		}
+	}
+	color += dither();
+	color = ApplyPostFX(uv, color);
+	fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+}
+
+
+void main() {
+
+    vec4 color;
+    vec2 fragCoord = vec2(float(gl_GlobalInvocationID.x), HEIGHT - 1 - float(gl_GlobalInvocationID.y));
+    mainImage(color, fragCoord);
+
+    // Convert the color components to 8-bit unsigned integer values
+    uint c_r = uint(color.r * 255.0);
+    uint c_g = uint(color.g * 255.0);
+    uint c_b = uint(color.b * 255.0);
+    uint c_a = uint(color.a * 255.0);
+
+
+    // Pack the components into a single uint value
+    uint pixelValue = (c_a << 24) | (c_b << 16) | (c_g << 8) | c_r;
+
+    // store the rendered mandelbrot set into a storage buffer:
+    imageData[WIDTH * gl_GlobalInvocationID.y + gl_GlobalInvocationID.x] = pixelValue;
+}
+        

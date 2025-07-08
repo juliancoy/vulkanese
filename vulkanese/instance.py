@@ -9,9 +9,7 @@ import vulkan as vk
 import sys
 
 from . import shader
-from . import descriptorPool
 from . import device
-from . import buffer
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "sinode"))

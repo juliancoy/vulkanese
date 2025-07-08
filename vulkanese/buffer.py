@@ -2,16 +2,14 @@ import json
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "sinode"))
-)
+here = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.insert(0, os.path.join(here, "..", "..", "sinode"))
 import sinode.sinode as sinode
 
 import vulkan as vk
 import numpy as np
 import time
-
-here = os.path.dirname(os.path.abspath(__file__))
 
 
 def glsltype2python(glsltype):
@@ -74,46 +72,62 @@ class Buffer(sinode.Sinode):
         return outstr
 
     def __init__(self, **kwargs):
-
+        self.device = kwargs["device"]
         sinode.Sinode.__init__(self, parent=self.device, **kwargs)
 
         # set defaults
         self.proc_kwargs(
-            **{
-                "overwrite": False,
-                "DEBUG": False,
-                "format": vk.VK_FORMAT_R64_SFLOAT,
-                "readFromCPU": True,
-                "usage": vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                "memProperties": 0
-                | vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-                | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-                | vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                | vk.VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-                "sharingMode": vk.VK_SHARING_MODE_EXCLUSIVE,
-                "stageFlags": vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                "qualifier": "",
-                "memtype": "float",
-                "rate": vk.VK_VERTEX_INPUT_RATE_VERTEX,
-                "stride": 4,
-                "compress": True,
-                "released": False,
-            }
+            overwrite=False,
+            DEBUG=False,
+            format=vk.VK_FORMAT_R64_SFLOAT,
+            readFromCPU=True,
+            usage=vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            memProperties=0
+            | vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+            | vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+            | vk.VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+            sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
+            stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            qualifier="",
+            memtype="float",
+            rate=vk.VK_VERTEX_INPUT_RATE_VERTEX,
+            stride=4,
+            compress=True,
+            released=False,
+            shape=[],
+            params=[],
         )
 
         self.proc_kwargs(**kwargs)
+
+        if self.usage == vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT:
+            self.btype = "uniform "
+            self.std = "std140"
+        else:
+            self.btype = "buffer "
+            if self.compress:
+                self.std = "std430"
+            else:
+                self.std = "std140"
 
         self.device = self.fromAbove("device")
         self.device.buffers += [self]
         self.vkDevice = self.device.vkDevice
         self.itemSizeBytes = glsltype2bytesize(self.memtype)
+        self.vectorMultiplier = 1
+        if self.memtype.startswith("vec"):
+            self.vectorMultiplier = int(self.memtype[3])
+
         self.pythonType = glsltype2python(self.memtype)
         self.getSkipval()
 
         # for vec3 etc, the size is already bakd in
         self.itemCount = int(np.prod(self.shape))
-        if self.memtype == "vec4":
-            self.itemCount *= 4
+        #if self.memtype == "vec4":
+        #    self.itemCount *= 4
+        if self.memtype == "vec3":
+            self.itemCount *= 3
         self.sizeBytes = int(self.itemCount * self.itemSizeBytes * self.skipval)
 
         self.debug("creating buffer " + self.name)
@@ -218,6 +232,12 @@ class Buffer(sinode.Sinode):
         # Maintain an address pointer for feed operations
         self.addrPtr = 0
 
+    def __getitem__(self, index):
+        return self.getByIndex(index)
+
+    def __setitem__(self, index, value):
+        self.setByIndexStart(index, value)
+
     def flush(self):
         return vk.vkFlushMappedMemoryRanges(
             device=self.device.vkDevice,
@@ -236,10 +256,14 @@ class Buffer(sinode.Sinode):
                 or self.memtype == "float"
                 or self.memtype == "uint"
                 or self.memtype == "int"
+                or self.memtype == "vec2"
+                or self.memtype == "vec3"
                 or self.memtype == "vec4"
                 or self.memtype == "double"
             )
         ):
+            self.skipval = 1
+        elif self.memtype == "vec4":
             self.skipval = 1
         elif (
             not self.usage & vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
@@ -264,8 +288,12 @@ class Buffer(sinode.Sinode):
         else:
             self.debug(len(self.pmap))
             self.debug(self.pythonType)
-            #self.pmap[:] = np.zeros((self.itemCount), dtype=self.pythonType)
-            self.set(np.zeros((self.itemCount), dtype=self.pythonType))
+            self.pmap[:] = np.zeros(
+                (self.itemCount * self.skipval), dtype=self.pythonType
+            )
+
+            # self.pmap[:] = data.astype(self.pythonType).flatten()
+            # self.set(np.zeros((self.itemCount*self.skipval), dtype=self.pythonType))
         if flush:
             self.flush()
 
@@ -277,6 +305,11 @@ class Buffer(sinode.Sinode):
         flatArray = np.frombuffer(self.pmap, self.pythonType)
         # because GLSL only allows 16-byte access,
         # we need to skip a few values in the memory
+
+        if self.memtype == "vec4":
+            #return flatArray.reshape(self.shape[1], self.shape[0], -1, order="C")
+            return flatArray.reshape(self.shape[0], self.shape[1], -1, order=order)
+
         if asComplex:
             rcvdArray = list(flatArray.astype(float))
             rcvdArrayReal = rcvdArray[::4]
@@ -305,8 +338,31 @@ class Buffer(sinode.Sinode):
                 rcvdArray = np.array(flatArray[indices]).reshape(self.shape)
         return rcvdArray
 
-    def saveAsImage(self, height, width, path="mandelbrot.png"):
+    def set(self, data, flush=True, order="C"):
+        # self.pmap[:] = data.astype(self.pythonType)
 
+        if len(self.pmap[:]) != np.prod(data.shape) * self.itemSizeBytes:
+            self.debug("WRONG SIZE")
+            self.debug("pmap (bytes): " + str(len(self.pmap[:])))
+            self.debug("SkipVal: " + str(self.skipval))
+            self.debug("item size (bytes): " + str(self.itemSizeBytes))
+            self.debug(self.sizeBytes)
+            self.debug("data (bytes): " + str(np.prod(data.shape) * self.itemSizeBytes))
+            raise Exception("Wrong Size")
+
+        if self.skipval == 1:
+            # self.pmap[:] = data.astype(self.pythonType).flatten()
+            self.pmap[:] = data.flatten(order=order)
+        else:
+            indices = np.arange(0, len(data), 1.0 / self.skipval).astype(int)
+            data = data[indices]
+            # print(self.pythonType)
+            self.pmap[:] = data.astype(self.pythonType).flatten(order=order)
+
+        if flush:
+            self.flush()
+
+    def saveAsImage(self, height, width, path="mandelbrot.png"):
         # Get the color data from the buffer, and cast it to bytes.
         # We save the data to a vector.
         st = time.time()
@@ -354,12 +410,11 @@ class Buffer(sinode.Sinode):
                 + ") "
                 + self.qualifier
                 + " "
-                + self.type
+                + self.memtype
                 + " "
                 + self.name
                 + ";\n"
             )
-
 
     def write(self, data):
         startByte = self.addrPtr
@@ -380,8 +435,8 @@ class Buffer(sinode.Sinode):
 
     def setByIndex(self, index, data):
         # self.debug(self.name + " setting " + str(index) + " to " + str(data))
-        startByte = index * self.itemSizeBytes * self.skipval
-        endByte = index * self.itemSizeBytes * self.skipval + self.itemSizeBytes
+        startByte = index * self.itemSizeBytes
+        endByte = (index + len(data)) * self.itemSizeBytes
         self.pmap[startByte:endByte] = np.array(data, dtype=self.pythonType)
 
     def setByIndexStart(self, startIndex, data):
@@ -400,32 +455,6 @@ class Buffer(sinode.Sinode):
         startByte = index * self.itemSizeBytes * self.skipval
         endByte = index * self.itemSizeBytes * self.skipval + self.itemSizeBytes
         return np.frombuffer(self.pmap[startByte:endByte], dtype=self.pythonType)
-
-    def set(self, data, flush=True):
-        # self.pmap[:] = data.astype(self.pythonType)
-
-        if len(self.pmap[:]) != np.prod(data.shape) * self.itemSizeBytes:
-            self.debug("WRONG SIZE")
-            self.debug("pmap (bytes): " + str(len(self.pmap[:])))
-            self.debug("item size (bytes): " + str(self.itemSizeBytes))
-            self.debug(self.sizeBytes)
-            self.debug(
-                "data (bytes): "
-                + str(np.prod(data.shape) * self.itemSizeBytes)
-            )
-            raise Exception("Wrong Size")
-
-        if self.skipval == 1:
-            # self.pmap[:] = data.astype(self.pythonType).flatten()
-            self.pmap[:] = data.astype(self.pythonType).flatten()
-        else:
-            indices = np.arange(0, len(data), 1.0 / self.skipval).astype(int)
-            data = data[indices]
-            # print(self.pythonType)
-            self.pmap[:] = data.astype(self.pythonType).flatten()
-
-        if flush:
-            self.flush()
 
     def fill(self, value):
         # self.pmap[: data.size * data.itemSize] = data
@@ -449,7 +478,6 @@ class Buffer(sinode.Sinode):
 
 class StorageBuffer(Buffer):
     def __init__(self, **kwargs):
-
         sinode.Sinode.__init__(self, **kwargs)
 
         # set defaults first
@@ -475,6 +503,7 @@ class StorageBuffer(Buffer):
 
         Buffer.__init__(self, **kwargs)
 
+
 class DebugBuffer(StorageBuffer):
     def __init__(self, **kwargs):
         sinode.Sinode.__init__(self, **kwargs)
@@ -499,46 +528,22 @@ class DebugBuffer(StorageBuffer):
 
 
 class VertexBuffer(Buffer):
-    def __init__(
-        self,
-        device,
-        name,
-        shape,
-        location,
-        DEBUG=False,
-        qualifier="",
-        memProperties=0
-        | vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-        | vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-        | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        memtype="float",
-        rate=vk.VK_VERTEX_INPUT_RATE_VERTEX,
-        stride=12,
-        compress=False,
-    ):
+    def __init__(self, **kwargs):
         # self.location = Buffer.currLocation
         # Buffer.currLocation+=1
 
         Buffer.__init__(
             self,
             DEBUG=False,
-            device=device,
-            name=name,
-            location=location,
-            shape=shape,
             format=vk.VK_FORMAT_R32G32B32_SFLOAT,
             readFromCPU=True,
             usage=vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            memProperties=memProperties,
             sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
             stageFlags=vk.VK_SHADER_STAGE_VERTEX_BIT,
-            qualifier=qualifier,
-            memtype=memtype,
             rate=vk.VK_VERTEX_INPUT_RATE_VERTEX,
-            stride=stride,
-            compress=compress,
+            **kwargs,
         )
-        self.binding = location
+        self.binding = self.location
         # the following are only needed for vertex buffers
         # vk.VK_VERTEX_INPUT_RATE_VERTEX: Move to the next data entry after each vertex
         # vk.VK_VERTEX_INPUT_RATE_INSTANCE: Move to the next data entry after each instance
@@ -641,6 +646,7 @@ class UniformBuffer(Buffer):
         memtype="float",
         rate=vk.VK_VERTEX_INPUT_RATE_VERTEX,
         stride=12,
+        **kwargs,
     ):
         Buffer.__init__(
             self,
@@ -660,223 +666,5 @@ class UniformBuffer(Buffer):
             rate=vk.VK_VERTEX_INPUT_RATE_VERTEX,
             stride=12,
             compress=False,
-        )
-
-
-class AccelerationStructure(Buffer):
-    def __init__(self, setupDict, shader):
-        self.pipeline = shader.pipeline
-        self.pipelineDict = self.pipeline.setupDict
-        self.vkCommandPool = self.pipeline.device.vkCommandPool
-        self.device = self.pipeline.device
-        self.vkDevice = self.pipeline.device.vkDevice
-        self.outputWidthPixels = self.pipeline.outputWidthPixels
-        self.outputHeightPixels = self.pipeline.outputHeightPixels
-
-
-class AccelerationStructureNV(AccelerationStructure):
-    def __init__(self, setupDict, shader):
-        AccelerationStructure.__init__(self, setupDict, shader)
-
-        # We need to get the compactedSize with a query
-
-        # // Get the size result back
-        # std::vector<VkDeviceSize> compactSizes(m_blas.size());
-        # vkGetQueryPoolResults(m_device, queryPool, 0, (uint32_t)compactSizes.size(), compactSizes.size() * sizeof(VkDeviceSize),
-        # 											compactSizes.data(), sizeof(VkDeviceSize), vk.VK_QUERY_RESULT_WAIT_BIT);
-
-        # just playing. we will guess that b***h
-
-        # Provided by vk.VK_NV_ray_tracing
-        self.asCreateInfo = vk.VkAccelerationStructureCreateInfoNV(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_NV,
-            pNext=None,
-            compactedSize=642000,  # VkDeviceSize
-        )
-
-        # Provided by vk.VK_NV_ray_tracing
-        self.vkAccelerationStructure = vk.vkCreateAccelerationStructureNV(
-            device=self.vkDevice, pCreateInfo=self.asCreateInfo, pAllocator=None
-        )
-
-
-# If type is vk.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_NV then geometryCount must be 0
-class TLASNV(AccelerationStructureNV):
-    def __init__(self, setupDict, shader):
-        AccelerationStructureNV.__init__(self, setupDict, shader)
-
-        for blasName, blasDict in setupDict["blas"].items():
-            newBlas = BLASNV(blasDict, shader)
-            self.children += [newBlas]
-
-        # Provided by vk.VK_NV_ray_tracing
-        self.asInfo = vk.VkAccelerationStructureInfoNV(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_INFO_NV,
-            pNext=None,  # const void*
-            type=vk.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-            flags=vk.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR,
-            instanceCount=len(self.children),  # uint32_t
-            geometryCount=0,  # uint32_t
-            pGeometries=None,  # const VkGeometryNV*
-        )
-
-
-class Geometry(sinode.Sinode):
-    def __init__(self, setupDict, blas, initialMesh):
-        sinode.Sinode.__init__(self, setupDict, blas)
-        buffSetupDict = {}
-        buffSetupDict["vertex"] = [[0, 1, 0], [1, 1, 1], [1, 1, 0]]
-        buffSetupDict["index"] = [[0, 1, 2]]
-        buffSetupDict["aabb"] = [[0, 1, 2]]
-        self.vertexBuffer = Buffer(
-            self.lookUp("device"), buffSetupDict["vertex"].flatten()
-        )
-        self.indexBuffer = Buffer(
-            self.lookUp("device"), buffSetupDict["index"].flatten()
-        )
-        self.aabb = Buffer(self.lookUp("device"), buffSetupDict["aabb"].flatten())
-
-        # ccw rotation
-        theta = 0
-        self.vkTransformMatrix = vk.VkTransformMatrixKHR(
-            # float    matrix[3][4];
-            [np.cos(theta), -np.sin(theta), 0, np.sin(theta), np.cos(theta), 0, 0, 0, 1]
-        )
-
-        self.geometryTriangles = vk.VkGeometryTrianglesNV(
-            sType=vk.VK_STRUCTURE_TYPE_GEOMETRY_TRIANGLES_NV,
-            pNext=None,
-            vertexData=self.buffer.vkBuffer,
-            vertexOffset=0,
-            vertexCount=len(buffSetupDict["vertex"].flatten()),
-            vertexStride=12,
-            vertexFormat=vk.VK_FORMAT_R32G32B32_SFLOAT,
-            indexData=self.indexBuffer.vkBuffer,
-            indexOffset=0,
-            indexCount=len(buffSetupDict["index"].flatten()),
-            indexType=vk.VK_INDEX_TYPE_UINT32,
-            transformData=self.vkTransformMatrix,
-            transformOffset=0,
-        )
-
-        self.aabbs = vk.VkGeometryAABBNV(
-            sType=vk.VK_STRUCTURE_TYPE_GEOMETRY_AABB_NV,
-            pNext=None,
-            aabbData=self.aabb.vkBuffer,
-            numAABBs=1,
-            stride=4,
-            offset=0,
-        )
-
-        self.geometryData = vk.VkGeometryDataNV(
-            triangles=self.geometryTriangles, aabbs=self.aabbs
-        )
-
-        # possible flags:
-
-        # vk.VK_GEOMETRY_OPAQUE_BIT_KHR = 0x00000001,
-        # vk.VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR = 0x00000002,
-        # // Provided by vk.VK_NV_ray_tracing
-        # vk.VK_GEOMETRY_OPAQUE_BIT_NV = vk.VK_GEOMETRY_OPAQUE_BIT_KHR,
-        # // Provided by vk.VK_NV_ray_tracing
-        # vk.VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_NV
-
-        # vk.VK_GEOMETRY_OPAQUE_BIT_KHR indicates that this geometry does
-        # not invoke the any-hit shaders even if present in a hit group.
-
-        self.vkGeometry = vk.VkGeometryNV(
-            sType=vk.VK_STRUCTURE_TYPE_GEOMETRY_NV,
-            pNext=None,
-            geometryType=vk.VK_GEOMETRY_TYPE_TRIANGLES_KHR,
-            geometry=self.geometryData,
-            flags=vk.VK_GEOMETRY_OPAQUE_BIT_KHR,
-        )
-
-
-# If type is vk.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_NV then instanceCount must be 0
-class BLASNV(AccelerationStructureNV):
-    def __init__(self, setupDict, shader, initialMesh):
-        AccelerationStructureNV.__init__(self, setupDict, shader)
-
-        self.geometry = Geometry(initialMesh, self)
-
-        # Provided by vk.VK_NV_ray_tracing
-        self.asInfo = vk.VkAccelerationStructureInfoNV(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_INFO_NV,
-            pNext=None,  # const void*
-            type=vk.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-            flags=vk.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR,
-            instanceCount=0,  # uint32_t
-            geometryCount=1,  # uint32_t
-            pGeometries=[self.geometry.vkGeometry],  # const VkGeometryNV*
-        )
-
-
-class AccelerationStructureKHR(AccelerationStructure):
-    def __init__(self, setupDict, shader):
-        AccelerationStructure.__init__(self, setupDict, shader)
-
-        # Identify the above data as containing opaque triangles.
-        asGeom = vk.VkAccelerationStructureGeometryKHR(
-            vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
-            geometryType=vk.VK_GEOMETRY_TYPE_TRIANGLES_KHR,
-            flags=vk.VK_GEOMETRY_OPAQUE_BIT_KHR,
-            triangles=geometry.triangles,
-        )
-
-        # The entire array will be used to build the BLAS.
-        offset = vk.VkAccelerationStructureBuildRangeInfoKHR(
-            firstVertex=0, primitiveCount=53324234, primitiveOffset=0, transformOffset=0
-        )
-
-        # Provided by vk.VK_NV_ray_tracing
-        pCreateInfo = vk.VkAccelerationStructureCreateInfoKHR(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_NV,  # VkStructureType
-            pNext=None,  # const void*
-            compactedSize=642000,  # VkDeviceSize
-        )
-
-        # Provided by vk.VK_NV_ray_tracing
-        self.vkAccelerationStructure = vk.vkCreateAccelerationStructureNV(
-            device=self.vkDevice, pCreateInfo=self.asCreateInfo, pAllocator=None
-        )
-
-
-# If type is vk.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_ then instanceCount must be 0
-class BLAS(AccelerationStructure):
-    def __init__(self, setupDict, shader, initialMesh):
-        AccelerationStructure.__init__(self, setupDict, shader)
-
-        self.geometry = Geometry(initialMesh, self)
-
-        # Provided by vk.VK__ray_tracing
-        self.asInfo = vk.VkAccelerationStructureInfo(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_INFO_,
-            pNext=None,  # const void*
-            type=vk.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-            flags=vk.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR,
-            instanceCount=0,  # uint32_t
-            geometryCount=1,  # uint32_t
-            pGeometries=[self.geometry.vkGeometry],  # const VkGeometry*
-        )
-
-
-# If type is vk.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_ then geometryCount must be 0
-class TLAS(AccelerationStructure):
-    def __init__(self, setupDict, shader):
-        AccelerationStructure.__init__(self, setupDict, shader)
-
-        for blasName, blasDict in setupDict["blas"].items():
-            newBlas = BLAS(blasDict, shader)
-            self.children += [newBlas]
-
-        # Provided by vk.VK__ray_tracing
-        self.asInfo = vk.VkAccelerationStructureInfo(
-            sType=vk.VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_INFO_,
-            pNext=None,  # const void*
-            type=vk.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-            flags=vk.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR,
-            instanceCount=len(self.children),  # uint32_t
-            geometryCount=0,  # uint32_t
-            pGeometries=None,  # const VkGeometry*
+            **kwargs,
         )

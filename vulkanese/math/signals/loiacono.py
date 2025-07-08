@@ -31,8 +31,9 @@ class Loiacono:
         for i, fprime in enumerate(self.fprime):
             dftlen = self.multiple / fprime
             # set zeros before the desired period (a multiple of pprime)
-            self.EIWN[i, : int(self.DTFTLEN - dftlen)] = np.array([0])
-            self.EIWN[i, :] /= dftlen ** (1 / 2)
+            self.EIWN[i, : int((self.DTFTLEN - dftlen)/2)] = np.array([0])
+            self.EIWN[i, -int((self.DTFTLEN - dftlen)/2) :] = np.array([0])
+            self.EIWN[i, :] /= dftlen
 
     def debugRun(self, y):
         nstart = time.time()
@@ -47,7 +48,7 @@ class Loiacono:
         endTime = time.time()
         # print("transfrom runtime (s) : " + str(endTime-startTime))
         self.spectrum = np.absolute(result)
-
+        return self.spectrum
         # self.auto = np.correlate(y,y, mode="valid")
 
     def plot(self):

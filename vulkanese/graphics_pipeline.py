@@ -25,33 +25,22 @@ import sinode.sinode as sinode
 class GraphicsPipeline(sinode.Sinode):
     def __init__(
         self,
-        device,
-        constantsDict,
-        indexBuffer,
-        shaders,
-        buffers,
-        surface,
-        outputWidthPixels=700,
-        outputHeightPixels=700,
-        culling=vk.VK_CULL_MODE_BACK_BIT,
-        oversample=vk.VK_SAMPLE_COUNT_1_BIT,
-        waitSemaphores=[],
+        **kwargs
     ):
 
-        sinode.Sinode.__init__(self, device)
+        self.setDefaults(
+            **kwargs
+        )        
+        
+        sinode.Sinode.__init__(self, parent = self.device)
 
-        self.culling = culling
-        self.oversample = oversample
-        self.surface = surface
-
-        self.indexBuffer = indexBuffer
-        self.DEBUG = False
-        self.constantsDict = constantsDict
-        self.outputWidthPixels = outputWidthPixels
-        self.outputHeightPixels = outputHeightPixels
-        self.device = device
-        self.shaders = shaders
-        self.waitSemaphores = waitSemaphores
+        self.setDefaults(
+            outputWidthPixels=700,
+            outputHeightPixels=700,
+            culling=vk.VK_CULL_MODE_BACK_BIT,
+            oversample=vk.VK_SAMPLE_COUNT_1_BIT,
+            waitSemaphores=[],
+        )
 
         # synchronization is owned by the pipeline (command buffer?)
         self.renderFence = synchronization.Fence(device=self.device)
@@ -75,12 +64,12 @@ class GraphicsPipeline(sinode.Sinode):
         )
 
         self.vkPipelineLayout = vk.vkCreatePipelineLayout(
-            device=device.vkDevice,
+            device=self.device.vkDevice,
             pCreateInfo=[self.vkPipelineLayoutCreateInfo],
             pAllocator=None,
         )
 
-        for shader in shaders:
+        for shader in self.shaders:
             # make the buffer accessable as a local attribute
             exec("self." + shader.name + "= shader")
 
@@ -93,7 +82,7 @@ class GraphicsPipeline(sinode.Sinode):
         self.allVertexBuffers = list(set(self.allVertexBuffers))
 
         self.vkAcquireNextImageKHR = vk.vkGetInstanceProcAddr(
-            device.instance.vkInstance, "vkAcquireNextImageKHR"
+            self.device.instance.vkInstance, "vkAcquireNextImageKHR"
         )
 
         # Create a generic render pass

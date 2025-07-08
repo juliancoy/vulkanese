@@ -7,16 +7,21 @@ import json
 import sdl2
 
 # include the Vulkanese directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 import vulkanese as ve
-import vulkanese.stock_pipeline.simple_graphics as simple_graphics
+import vulkanese.image.simple_graphics as simple_graphics
 import vulkan as vk
 import gc
 import shapes
 
 
 class PyramidExample(simple_graphics.SimpleGraphicsPipeline):
-    def __init__(self, device, surface, constantsDict):
+    def __init__(self, device, constantsDict):
+
+        surface = ve.surface.Surface(
+            instance=device.instance, device=device, width=width, height=height
+        )
+
         simple_graphics.SimpleGraphicsPipeline.__init__(
             self, device=device, surface=surface, constantsDict=constantsDict
         )
@@ -81,11 +86,7 @@ if __name__ == "__main__":
     print("naively choosing device 0")
     device = instance.getDevice(0)
 
-    surface = ve.surface.Surface(
-        instance=instance, device=device, width=width, height=height
-    )
-
-    ht = PyramidExample(device=device, surface=surface, constantsDict=constantsDict)
+    ht = PyramidExample(device=device, constantsDict=constantsDict)
 
     # print the object hierarchy
     print("Object tree:")
