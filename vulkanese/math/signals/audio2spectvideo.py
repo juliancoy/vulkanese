@@ -68,11 +68,16 @@ print(f"Processing {num_frames} frames with Loiacono transform...")
 # Convert background color to numpy array for vector operations
 bg_color_np = np.array(BG_COLOR, dtype=np.float32)
 white_color = np.array([255, 255, 255], dtype=np.float32)
+red_color = np.array([0, 0, 255], dtype=np.float32)  # Red color for middle tenth
 
 # Initialize a window to center the display
 if realtime_display:
     cv2.namedWindow("Spectral Peaks", cv2.WINDOW_NORMAL)
     screen_width = cv2.getWindowImageRect("Spectral Peaks")[2]
+
+# Calculate which time rows are in the middle tenth (vertically)
+middle_start = BUFFER_FRAMES // 2 - BUFFER_FRAMES // 20  # Half of tenth on each side
+middle_end = BUFFER_FRAMES // 2 + BUFFER_FRAMES // 20
 
 for i in tqdm.tqdm(range(num_frames)):
     start = i * hop_size
@@ -97,9 +102,17 @@ for i in tqdm.tqdm(range(num_frames)):
     # Create color frame with gradient
     img = np.zeros((BUFFER_FRAMES, NUM_BINS, 3), dtype=np.uint8)
 
-    # Calculate the gradient for all pixels at once
+    # Create full image with white gradient first
     buffer_3d = np.repeat(buffer[:, :, np.newaxis], 3, axis=2)
-    img = (bg_color_np * (1 - buffer_3d) + white_color * buffer_3d).astype(np.uint8)
+    img = (bg_color_np * (1 - buffer_3d) + white_color * buffer_3d)
+    
+    # Overwrite the middle tenth with red gradient
+    img[middle_start:middle_end, :] = (
+        bg_color_np * (1 - buffer_3d[middle_start:middle_end, :]) + 
+        red_color * buffer_3d[middle_start:middle_end, :]
+    )
+    
+    img = img.astype(np.uint8)
 
     # Rotate counterclockwise 90 degrees (270 degrees clockwise)
     img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -108,8 +121,8 @@ for i in tqdm.tqdm(range(num_frames)):
     img = cv2.resize(img, VIDEO_SIZE, interpolation=cv2.INTER_NEAREST)
 
     # Add red line at center (current time)
-    center_pos = VIDEO_SIZE[0] // 2
-    img[:, center_pos-1 : center_pos + 1] = CURRENT_TIME_COLOR
+    #center_pos = VIDEO_SIZE[0] // 2
+    #img[:, center_pos-1 : center_pos + 1] = CURRENT_TIME_COLOR
 
     out.write(img)
 
